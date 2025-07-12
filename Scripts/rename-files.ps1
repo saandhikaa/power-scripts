@@ -5,17 +5,24 @@ param (
     [string[]]$Exclude = @()               # e.g. @("DoNotTouch")
 )
 
-# Timestamped log file
+# Timestamped log files
 $timestamp = Get-Date -Format "yyyy-MM-dd_HHmm"
 $logFile = ".\rename_log_$timestamp.csv"
-"OldFilePath,NewFilePath,Timestamp" | Out-File -FilePath $logFile -Encoding UTF8
+$notFoundFile = ".\not_found_list_$timestamp.txt"
 
-# Normalize extension (ensure it starts with a dot)
+# Init log files
+"OldFilePath,NewFilePath,Timestamp" | Out-File -FilePath $logFile -Encoding UTF8
+"" | Out-File -FilePath $notFoundFile -Encoding UTF8  # Empty init
+
+# Normalize extension
 if ($Extension -and -not $Extension.StartsWith(".")) {
     $Extension = ".$Extension"
 }
 
-# Load mapping
+# Base path for relative references
+$basePath = (Get-Location).Path
+
+# Process mappings
 Get-Content $ListFile | ForEach-Object {
     $parts = $_ -split "\s*,\s*"
 
@@ -27,10 +34,9 @@ Get-Content $ListFile | ForEach-Object {
     $oldName = $parts[0].Trim()
     $newName = $parts[1].Trim()
 
-    # Collect matching files
+    # Gather matching files
     $files = Get-ChildItem -Path . -Recurse -File | Where-Object {
-        # Skip files in folders named "_print" or "collecting" (at any level)
-        $_.FullName -match '\\(_print|collecting)\\' -eq $false
+        $_.FullName -notmatch '\\(_print|collecting)\\'
     }
 
     if ($Extension) {
@@ -41,12 +47,11 @@ Get-Content $ListFile | ForEach-Object {
         $_.BaseName -eq $oldName
     }
 
-    # Apply include and exclude filter based on top-level folder (only immediate children of current directory)
+    # Apply folder filters
     $filteredFiles = @()
 
     foreach ($file in $files) {
-        # Get relative path from current dir
-        $relativePath = $file.FullName.Substring((Get-Location).Path.Length + 1)
+        $relativePath = $file.FullName.Substring($basePath.Length + 1)
         $topFolder = $relativePath.Split([IO.Path]::DirectorySeparatorChar)[0]
 
         $includeCheck = ($Include.Count -eq 0 -or $Include -contains $topFolder)
@@ -57,15 +62,26 @@ Get-Content $ListFile | ForEach-Object {
         }
     }
 
+    if ($filteredFiles.Count -eq 0) {
+        # Log only the missing oldName (not full path)
+        $oldName | Out-File -FilePath $notFoundFile -Append -Encoding UTF8
+        Write-Host "Not found: $oldName"
+        return
+    }
+
     foreach ($file in $filteredFiles) {
         $newFileName = "$newName$($file.Extension)"
         $newPath = Join-Path -Path $file.DirectoryName -ChildPath $newFileName
 
         try {
             Rename-Item -Path $file.FullName -NewName $newPath -ErrorAction Stop
-            Write-Host "Renamed '$($file.FullName)' → '$newPath'"
 
-            "$($file.FullName),$newPath,$([DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss"))" |
+            $relativeOld = $file.FullName.Substring($basePath.Length + 1)
+            $relativeNew = $newPath.Substring($basePath.Length + 1)
+
+            Write-Host "Renamed '$relativeOld' → '$relativeNew'"
+
+            "$relativeOld,$relativeNew,$([DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss"))" |
                 Out-File -FilePath $logFile -Append -Encoding UTF8
         }
         catch {
