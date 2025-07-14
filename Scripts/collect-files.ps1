@@ -1,82 +1,147 @@
 param (
-    [string[]]$Files,  # Array of file names to copy (can be with or without extension)
-    [string]$List,     # Path to a text file containing the list of files to collect
-    [string]$Output    # Custom folder name for the destination
+    [string]$List = "list.txt",
+    [string]$Output,
+    [switch]$Help
 )
 
-# Set the destination directory path
+# === Help Section ===
+if ($Help) {
+    Write-Host @"
+
+File Collector Script (v.1.0.0)
+-------------------------------
+A PowerShell tool to collect files from current and subdirectories into a single organized folder.
+
+Usage:
+  collect-files.ps1 [options]
+
+Options:
+  -List       (optional) List file to read filenames from (default: list.txt).
+               Use extension for specific file
+               Create 'list.txt' like:
+
+                 Document.docx
+                 Report
+                 IMG_250714
+
+  -Output     (optional) Destination folder (under 'collecting').
+  -Help       Show this help.
+
+Example:
+  collect-files.ps1 -List "myfiles.txt" -Output "backup_250714"
+
+Notes:
+- Collects files from the current directory and all subfolders (excluding the 'collecting' folder).
+- Automatically renames duplicates with a numerical suffix (e.g., file-1.jpg).
+- Logs collected files (final filenames) and missing files.
+- Generates timestamped logs (e.g., 2507141424_collected_files.log).
+"@
+    exit 0
+}
+
+# === Check List File First ===
+if (-not (Test-Path $List)) {
+    Write-Host "List file '$List' not found." -ForegroundColor Red
+    exit 1
+}
+
+$Files = Get-Content -Path $List | Where-Object { $_.Trim() -ne "" }
+
+if (-not $Files.Count) {
+    Write-Host "List file '$List' is empty." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Loaded $($Files.Count) file(s) from '$List'" -ForegroundColor Cyan
+
+# === Prepare Output Folder ===
 $collectingDir = "collecting"
-$destinationDir = "$collectingDir\$Output"
 
-# Create the destination directory if it doesn't exist
-If (-not (Test-Path -Path $destinationDir)) {
-    New-Item -ItemType Directory -Path $destinationDir | Out-Null
-    Write-Host "Created destination directory: $destinationDir"
+if (-not (Test-Path $collectingDir)) {
+    New-Item -ItemType Directory -Path $collectingDir | Out-Null
+    Write-Host "Created base collecting directory: $collectingDir" -ForegroundColor Green
 }
 
-# Initialize a hashtable to track the file counts per folder
+# Auto output name based on timestamp
+if (-not $Output) {
+    $Output = (Get-Date).ToString("yyMMddHHmm")
+}
+
+$destinationDir = Join-Path $collectingDir $Output
+
+# === Check if Output Exists, Add Increment ===
+$counter = 1
+$finalDest = $destinationDir
+while (Test-Path $finalDest) {
+    $finalDest = "$destinationDir-$counter"
+    $counter++
+}
+
+$destinationDir = $finalDest
+New-Item -ItemType Directory -Path $destinationDir | Out-Null
+Write-Host "Destination directory created: $destinationDir" -ForegroundColor Green
+
+# === Main Collecting Process ===
 $folderFileCount = @{}
-
-# Get the current working directory and escape backslashes for regex
 $rootPath = [regex]::Escape((Get-Location).Path)
+$missingLogFile = "$destinationDir/missing_files.log"
+$collectedLogFile = "$destinationDir/collected_files.log"
 
-# If a list file is provided, read its contents and append to $Files
-If ($List -and (Test-Path -Path $List)) {
-    $Files += Get-Content -Path $List | Where-Object { $_ -match '\S' }  # Ignore empty lines
-    Write-Host "Loaded files from list: $List"
-}
+if (Test-Path $missingLogFile) { Clear-Content $missingLogFile }
+if (Test-Path $collectedLogFile) { Clear-Content $collectedLogFile }
 
-# Log file path for missing files
-$logFile = "$destinationDir\missing_files.log"
-If (Test-Path $logFile) { Clear-Content -Path $logFile }  # Clear previous log
-
-# Get all files from current and subfolders, explicitly excluding the "collecting" folder
-$foundFiles = Get-ChildItem -Path . -Recurse -File | Where-Object { $_.FullName -notmatch "collecting\\" }
-
-# Track missing files
+$foundFiles = Get-ChildItem -Recurse -File | Where-Object { $_.FullName -notmatch "collecting\\" }
 $missingFiles = @()
+$collectedEntries = @()
 
-# Process each file from the list
 foreach ($file in $Files) {
-    # Search for the file (with or without extension)
-    $matchedFile = $foundFiles | Where-Object { 
-        $_.Name -eq $file -or [System.IO.Path]::GetFileNameWithoutExtension($_.Name) -eq $file 
+    $matched = $foundFiles | Where-Object {
+        $_.Name -eq $file -or [System.IO.Path]::GetFileNameWithoutExtension($_.Name) -eq $file
     }
 
-    if ($matchedFile) {
-        foreach ($fileObj in $matchedFile) {
-            # Get the folder path of the current file (relative path)
-            $relativePath = $fileObj.DirectoryName -replace "^$rootPath\\?", ""
+    if ($matched) {
+        foreach ($m in $matched) {
+            $relative = $m.DirectoryName -replace "^$rootPath\\?", ""
 
-            # Increment the file count for the folder
-            If (-not $folderFileCount.ContainsKey($relativePath)) {
-                $folderFileCount[$relativePath] = 0
+            if (-not $folderFileCount.ContainsKey($relative)) { $folderFileCount[$relative] = 0 }
+            $folderFileCount[$relative]++
+
+            # === Handle Duplicate Filenames ===
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($m.Name)
+            $extension = [System.IO.Path]::GetExtension($m.Name)
+            $destFileName = $m.Name
+            $suffix = 1
+            while (Test-Path (Join-Path $destinationDir $destFileName)) {
+                $destFileName = "$baseName-$suffix$extension"
+                $suffix++
             }
-            $folderFileCount[$relativePath]++
 
-            # Construct the destination path for each file
-            $destPath = Join-Path -Path $destinationDir -ChildPath $fileObj.Name
-            
-            # Copy the file to the destination folder
-            Copy-Item -Path $fileObj.FullName -Destination $destPath -Force
-            Write-Host "$relativePath\$($fileObj.Name) collected!"
+            $dest = Join-Path $destinationDir $destFileName
+            Copy-Item $m.FullName -Destination $dest -Force
+            Write-Host "$relative\$($m.Name) collected as $destFileName" -ForegroundColor Green
+            $collectedEntries += "$destFileName, $relative"
         }
     } else {
-        Write-Host "WARNING: File '$file' not found!" -ForegroundColor Yellow
+        Write-Host "'$file' not found." -ForegroundColor Yellow
         $missingFiles += $file
     }
 }
 
-# Write missing files to log file
-If ($missingFiles.Count -gt 0) {
-    $missingFiles | Out-File -FilePath $logFile -Encoding utf8
-    Write-Host "Missing files logged in: $logFile" -ForegroundColor Red
+# === Missing Files Log ===
+if ($missingFiles.Count -gt 0) {
+    $missingFiles | Out-File $missingLogFile -Encoding utf8
+    Write-Host "Missing files logged at: $missingLogFile" -ForegroundColor Red
 }
 
-# Add a newline before the summary
+# === Collected Files Log ===
+if ($collectedEntries.Count -gt 0) {
+    $collectedEntries | Out-File $collectedLogFile -Encoding utf8
+    Write-Host "Collected files logged at: $collectedLogFile" -ForegroundColor Cyan
+}
+
 Write-Host ""
 
-# Echo the summary of collected files per folder
+# === Summary ===
 $folderFileCount.GetEnumerator() | ForEach-Object {
-    Write-Host "$($_.Value) files collected from $($_.Key)"
+    Write-Host "$($_.Value) files collected from $($_.Key)" -ForegroundColor Cyan
 }
