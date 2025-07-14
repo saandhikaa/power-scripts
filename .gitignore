@@ -1,1 +1,10 @@
+Config/
 Library/
+
+# Ignore VSCode/IDE/editor configs
+.vscode/
+*.pshistory
+
+# Optional: ignore common log or temp files
+*.log
+*.tmp
