@@ -45,7 +45,7 @@ if (-not (Test-Path $List)) {
     exit 1
 }
 
-$Files = Get-Content -Path $List | Where-Object { $_.Trim() -ne "" }
+$Files = Get-Content -Path $List | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
 
 if (-not $Files.Count) {
     Write-Host "List file '$List' is empty." -ForegroundColor Red
