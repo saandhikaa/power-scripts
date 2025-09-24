@@ -1,63 +1,66 @@
 function prompt {
     # ANSI escape codes for colors
-    $resetColor = "$([char]27)[0m"
-    $blue = "$([char]27)[1;34m"
-    $brightPink = "$([char]27)[1;95m"  # Brighter pink for branch
-    $yellow = "$([char]27)[1;33m"
-    $green = "$([char]27)[1;32m"
-    $red = "$([char]27)[1;31m"
-    $cyan = "$([char]27)[1;36m"
+    $esc = [char]27
+    $resetColor = "${esc}[0m"
+    $blue = "${esc}[1;34m"
+    $brightPink = "${esc}[1;95m"
+    $yellow = "${esc}[1;33m"
+    $green = "${esc}[1;32m"
+    $greenBright = "${esc}[1;92m"
+    $red = "${esc}[1;31m"
+    $cyan = "${esc}[1;36m"
+    $magenta = "${esc}[1;35m"
 
-    # Git status variables with normal symbols (powerlevel style)
-    $gitBranch = ''
-    $gitSymbol = [char]0xe0a0  # Nerd Fonts Git Branch Symbol ()
-    $gitUntrackedSymbol = '?'  # Powerlevel-style symbol for untracked files
-    $gitModifiedSymbol = '!'   # Powerlevel-style symbol for modified files
-    $gitDeletedSymbol = 'x'    # Powerlevel-style symbol for deleted files
-    $gitPushSymbol = '↑'       # Powerlevel-style symbol for push
-    $gitPullSymbol = '↓'       # Powerlevel-style symbol for pull
+    # Git symbols (Powerlevel style)
+    $gitSymbol = [char]0xe0a0  # 
+    $gitUntrackedSymbol = '?'
+    $gitModifiedSymbol = '!'
+    $gitDeletedSymbol  = 'x'
+    $gitStagedSymbol   = '+'
+    $gitPushSymbol     = '↑'
+    $gitPullSymbol     = '↓'
 
-    # Get the full current path and shorten if needed
-    $fullPath = (Get-Location).Path
-    $pathParts = $fullPath -split '\\'
+    # Get current path
+    $fullPath = $PWD.Path
     $maxLength = 70
-
-    if ($fullPath.Length -gt $maxLength) {
-        # Split path into parts and keep the last part (leaf)
-        $pathParts = $fullPath -split '\\'
-        $leaf = $pathParts[-1]
-        $shortenedPath = " ..." + ($fullPath.Substring($fullPath.Length - $maxLength + 3))
+    $shortenedPath = if ($fullPath.Length -gt $maxLength) {
+        " ...$($fullPath.Substring($fullPath.Length - $maxLength + 4))"
     } else {
-        $shortenedPath = $fullPath
+        $fullPath
     }
 
-    # Check if current location is a git repository
-    if (Test-Path .git) {
-        # Get the current branch name
-        $gitBranch = git rev-parse --abbrev-ref HEAD 2>$null
+    # Initialize Git info
+    $gitBranch = ''
+    $gitDetails = ''
 
-        # Get uncommitted changes
-        $gitStatus = git status --porcelain 2>$null
-        $untracked = ($gitStatus | Select-String '^\?\?' -AllMatches).Matches.Count
-        $modified = ($gitStatus | Select-String '^ M' -AllMatches).Matches.Count
-        $deleted = ($gitStatus | Select-String '^ D' -AllMatches).Matches.Count
+    try {
+        $gitRoot = git rev-parse --show-toplevel 2>$null
+        if ($gitRoot) {
+            $branch = git rev-parse --abbrev-ref HEAD 2>$null
+            $status = git status --porcelain 2>$null
 
-        # Check if need to push or pull
-        $ahead = git rev-list --count "HEAD@{u}..HEAD" 2>$null
-        $behind = git rev-list --count "HEAD..HEAD@{u}" 2>$null
+            $untracked = ($status | Select-String '^\?\?' -AllMatches).Matches.Count
+            $modified = ($status | Select-String '^ M' -AllMatches).Matches.Count
+            $deleted  = ($status | Select-String '^ D' -AllMatches).Matches.Count
+            $staged   = ($status | Select-String '^[A-Z]' -AllMatches).Matches.Count
 
-        # Construct Git branch details with powerlevel-style symbols and colors
-        $gitDetails = ""
-        if ($untracked -gt 0) { $gitDetails += " $cyan$gitUntrackedSymbol$untracked$resetColor" }
-        if ($modified -gt 0) { $gitDetails += " $yellow$gitModifiedSymbol$modified$resetColor" }
-        if ($deleted -gt 0) { $gitDetails += " $red$gitDeletedSymbol$deleted$resetColor" }
-        if ($ahead -gt 0) { $gitDetails += " $green$gitPushSymbol$ahead$resetColor" }
-        if ($behind -gt 0) { $gitDetails += " $green$gitPullSymbol$behind$resetColor" }
+            try {
+                $ahead  = git rev-list --count "HEAD@{u}..HEAD" 2>$null
+                $behind = git rev-list --count "HEAD..HEAD@{u}" 2>$null
+            } catch {
+                $ahead = 0; $behind = 0
+            }
 
-        # Apply bright pink color to branch name
-        $gitBranch = " $brightPink$gitSymbol $gitBranch$resetColor$gitDetails"
-    }
+            if ($staged   -gt 0) { $gitDetails += " $greenBright$gitStagedSymbol$staged$resetColor" }
+            if ($modified -gt 0) { $gitDetails += " $yellow$gitModifiedSymbol$modified$resetColor" }
+            if ($untracked -gt 0){ $gitDetails += " $cyan$gitUntrackedSymbol$untracked$resetColor" }
+            if ($deleted  -gt 0) { $gitDetails += " $red$gitDeletedSymbol$deleted$resetColor" }
+            if ($ahead    -gt 0) { $gitDetails += " $blue$gitPushSymbol$ahead$resetColor" }
+            if ($behind   -gt 0){ $gitDetails += " $blue$gitPullSymbol$behind$resetColor" }
 
-    # Build the prompt with colored path and Git status
-    "`n$blue$shortenedPath$gitBranch$resetColor`n> "
+            $gitBranch = " $brightPink$gitSymbol $branch$resetColor$gitDetails"
+        }
+    } catch {}
+
+    "`n$blue$shortenedPath$gitBranch$resetColor`n$cyan❯ $resetColor"
 }
